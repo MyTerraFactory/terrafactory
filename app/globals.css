@@ -1,0 +1,161 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  --bg: #07111f;
+  --panel: #0f1b2d;
+  --panel-soft: #14243a;
+  --line: rgba(148, 163, 184, 0.22);
+  --text: #e5edf6;
+  --muted: #94a3b8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(45, 212, 191, 0.22), transparent 26%),
+    radial-gradient(circle at 82% 12%, rgba(192, 38, 211, 0.14), transparent 24%),
+    linear-gradient(135deg, #07111f 0%, #0d1624 44%, #101828 100%);
+  color: var(--text);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+.tf-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+}
+
+@media (min-width: 1280px) {
+  .tf-workspace[data-left-open="true"][data-right-open="true"] {
+    grid-template-columns: var(--left-panel-width) minmax(0, 1fr) var(--right-panel-width);
+  }
+
+  .tf-workspace[data-left-open="true"][data-right-open="false"] {
+    grid-template-columns: var(--left-panel-width) minmax(0, 1fr);
+  }
+
+  .tf-workspace[data-left-open="false"][data-right-open="true"] {
+    grid-template-columns: minmax(0, 1fr) var(--right-panel-width);
+  }
+
+}
+
+.tf-resize-handle {
+  display: none;
+  position: absolute;
+  top: 0;
+  z-index: 30;
+  width: 10px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.tf-resize-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 54px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(45, 212, 191, 0.2), rgba(34, 211, 238, 0.75), rgba(192, 38, 211, 0.35));
+  box-shadow: 0 0 18px rgba(34, 211, 238, 0.22);
+  content: "";
+  opacity: 0.45;
+  transform: translate(-50%, -50%);
+  transition: opacity 160ms ease, width 160ms ease;
+}
+
+.tf-resize-handle:hover::after,
+.tf-resizing .tf-resize-handle::after {
+  width: 4px;
+  opacity: 1;
+}
+
+.tf-resize-handle-left {
+  right: -5px;
+}
+
+.tf-resize-handle-right {
+  left: -5px;
+}
+
+.tf-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+@media (min-width: 1280px) {
+  .tf-resize-handle {
+    display: block;
+  }
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f8fafc;
+  --panel: #ffffff;
+  --panel-soft: #eef2f7;
+  --line: rgba(15, 23, 42, 0.14);
+  --text: #0f172a;
+  --muted: #475569;
+}
+
+:root[data-theme="light"] body {
+  background: linear-gradient(135deg, #f8fafc 0%, #eef7f5 48%, #f3f4f6 100%);
+}
+
+:root[data-theme="light"] [class*="bg-slate-950"],
+:root[data-theme="light"] [class*="bg-[#091322"] {
+  background-color: #f8fafc !important;
+}
+
+:root[data-theme="light"] [class*="bg-slate-900"],
+:root[data-theme="light"] [class*="bg-slate-800"] {
+  background-color: #ffffff !important;
+}
+
+:root[data-theme="light"] [class*="text-slate-50"],
+:root[data-theme="light"] [class*="text-slate-100"],
+:root[data-theme="light"] [class*="text-slate-200"],
+:root[data-theme="light"] [class*="text-slate-300"] {
+  color: #0f172a !important;
+}
+
+:root[data-theme="light"] [class*="text-slate-400"],
+:root[data-theme="light"] [class*="text-slate-500"] {
+  color: #475569 !important;
+}
+
+:root[data-theme="light"] [class*="border-slate-"] {
+  border-color: rgba(15, 23, 42, 0.16) !important;
+}
+
+:root[data-theme="light"] input,
+:root[data-theme="light"] select,
+:root[data-theme="light"] textarea {
+  background-color: #ffffff !important;
+  color: #0f172a !important;
+}

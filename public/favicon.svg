@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="TerraFactory">
+  <rect width="64" height="64" rx="14" fill="#07111f"/>
+  <path d="M32 6 43 12.5v13L32 32 21 25.5v-13L32 6Z" fill="#22d3ee"/>
+  <path d="M16 15 27 21.5v13L16 41 5 34.5v-13L16 15Z" fill="#164a8b"/>
+  <path d="M48 15 59 21.5v13L48 41 37 34.5v-13L48 15Z" fill="#1d4ed8"/>
+  <path d="M32 24 43 30.5v13L32 50 21 43.5v-13L32 24Z" fill="#0f766e"/>
+  <path d="M14 47 32 57l18-10" fill="none" stroke="#38bdf8" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M18 39 32 47l14-8" fill="none" stroke="#67e8f9" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
