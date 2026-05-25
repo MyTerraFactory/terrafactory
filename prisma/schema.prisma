@@ -1,0 +1,135 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Provider {
+  AWS
+  AZURE
+  GCP
+}
+
+enum ProjectRole {
+  OWNER
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+model User {
+  id             String        @id @default(cuid())
+  email          String        @unique
+  name           String?
+  image          String?
+  githubId       String?       @unique
+  googleId       String?       @unique
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  memberships    Membership[]
+  templates      Template[]
+  versionHistory VersionHistory[]
+}
+
+model Team {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  createdAt   DateTime     @default(now())
+  projects    Project[]
+  memberships Membership[]
+}
+
+model Membership {
+  id        String      @id @default(cuid())
+  role      ProjectRole
+  userId    String
+  teamId    String
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  team      Team        @relation(fields: [teamId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, teamId])
+}
+
+model Project {
+  id           String                    @id @default(cuid())
+  name         String
+  provider     Provider
+  environment  String
+  region       String
+  stateBucket  String
+  teamId       String
+  team         Team                      @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  components   InfrastructureComponent[]
+  generated    GeneratedFile[]
+  versions     VersionHistory[]
+  createdAt    DateTime                  @default(now())
+  updatedAt    DateTime                  @updatedAt
+}
+
+model InfrastructureComponent {
+  id        String   @id @default(cuid())
+  type      String
+  name      String
+  enabled   Boolean  @default(true)
+  config    Json
+  position  Json?
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model GeneratedFile {
+  id        String   @id @default(cuid())
+  path      String
+  language  String
+  content   String
+  checksum  String
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+}
+
+model Template {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique
+  description String
+  provider    Provider
+  category    String
+  definition  Json
+  published   Boolean  @default(false)
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ModuleRegistry {
+  id             String   @id @default(cuid())
+  provider       Provider
+  resourceType   String
+  source         String
+  version        String
+  requiredInputs Json
+  optionalInputs Json
+  metadata       Json
+  syncedAt       DateTime @default(now())
+
+  @@unique([provider, resourceType, source])
+}
+
+model VersionHistory {
+  id        String   @id @default(cuid())
+  label     String
+  snapshot  Json
+  projectId String
+  userId    String
+  project   Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id])
+  createdAt DateTime @default(now())
+}
