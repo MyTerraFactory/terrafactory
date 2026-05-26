@@ -135,6 +135,27 @@ function awsEndpointShortName(value: unknown): string {
   return parts[parts.length - 1] || value.trim();
 }
 
+function awsAuroraModuleBody(project: ProjectState, component: InfraComponent, base: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...base,
+    name: `\${local.name_prefix}-${sanitizeName(component.name)}`,
+    identifier: `\${local.name_prefix}-${sanitizeName(component.name)}`,
+    region: "var.aws_region",
+    sec_region: "var.aws_secondary_region",
+    private_subnet_ids_p: awsPrivateSubnetIds(project),
+    private_subnet_ids_s: "var.aws_secondary_private_subnet_ids",
+    password: "var.sensitive_database_password",
+    engine: "aurora-postgresql",
+    engine_version_pg: component.config.engineVersion,
+    database_name: sanitizeName(project.name).replaceAll("-", "_"),
+    instance_class: component.config.instanceClass,
+    username: "tfadmin",
+    primary_instance_count: component.config.minCapacity ?? component.config.replicas ?? (component.config.multiAz ? 2 : 1),
+    secondary_instance_count: 0,
+    tags: componentTags(component)
+  };
+}
+
 function locationShort(project: ProjectState): string {
   return project.region
     .split(/[^a-zA-Z0-9]/)
@@ -366,25 +387,29 @@ function awsModuleBody(project: ProjectState, component: InfraComponent, base: R
     case "eks":
       return {
         ...base,
-        cluster_name: "${local.name_prefix}-eks",
+        cluster_name: "var.aws_eks_cluster_name",
+        cluster_endpoint: "var.aws_eks_cluster_endpoint",
         cluster_version: component.config.clusterVersion,
-        vpc_id: awsVpcId(project),
-        subnet_ids: awsPrivateSubnetIds(project),
-        cluster_endpoint_private_access: component.config.privateEndpoint,
-        cluster_enabled_log_types: component.config.enableAuditLogs ? ["api", "audit", "authenticator", "controllerManager", "scheduler"] : [],
-        cluster_log_retention_in_days: component.config.backupRetentionDays,
-        node_groups: {
-          default: {
-            instance_types: [component.config.nodeInstanceType],
-            min_size: component.config.minNodes,
-            max_size: component.config.maxNodes,
-            desired_size: component.config.minNodes,
-            autoscaling_enabled: component.config.autoscaling ?? true
+        oidc_provider_arn: "var.aws_eks_oidc_provider_arn",
+        enable_metrics_server: true,
+        enable_cluster_autoscaler: component.config.autoscaling ?? true,
+        enable_aws_load_balancer_controller: true,
+        enable_aws_cloudwatch_metrics: component.config.enableMonitoring,
+        enable_aws_for_fluentbit: component.config.enableAuditLogs,
+        eks_addons: {
+          coredns: {},
+          kube_proxy: {},
+          vpc_cni: {
+            most_recent: true
           }
         },
         tags: componentTags(component)
       };
     case "rds":
+      if (mapping?.moduleSource === "aws-ia/rds-aurora/aws") {
+        return awsAuroraModuleBody(project, component, base);
+      }
+
       return {
         ...base,
         identifier: "${local.name_prefix}-postgres",
@@ -428,6 +453,10 @@ function awsModuleBody(project: ProjectState, component: InfraComponent, base: R
         tags: componentTags(component)
       };
     default:
+      if (mapping?.moduleSource === "aws-ia/rds-aurora/aws") {
+        return awsAuroraModuleBody(project, component, base);
+      }
+
       if (!mapping || mapping.moduleSource.startsWith("./")) {
         return {
           ...base,
@@ -961,6 +990,21 @@ function generateVariables(project: ProjectState): string {
   description = "AWS resource ARN protected by the AWS-IA Shield Advanced module."
   type        = string
   default     = ""
+}`,
+          `variable "aws_eks_cluster_name" {
+  description = "Existing EKS cluster name used by the AWS-IA EKS Blueprints Addons module."
+  type        = string
+  default     = "${sanitizeName(project.name)}-${project.environment}-eks"
+}`,
+          `variable "aws_eks_cluster_endpoint" {
+  description = "Existing EKS cluster endpoint used by the AWS-IA EKS Blueprints Addons module."
+  type        = string
+  default     = ""
+}`,
+          `variable "aws_eks_oidc_provider_arn" {
+  description = "Existing EKS cluster OIDC provider ARN used by the AWS-IA EKS Blueprints Addons module."
+  type        = string
+  default     = ""
 }`
         ]
       : []),
@@ -1082,9 +1126,11 @@ function generateOutputs(project: ProjectState): string {
     const clusterValue =
       project.provider === "azure" || project.provider === "gcp"
         ? `module.${moduleName(project, eks)}.name`
-        : getModuleMapping(eks.type, project.provider)?.moduleSource.startsWith("./")
-          ? `module.${moduleName(project, eks)}.name`
-          : `module.${moduleName(project, eks)}.cluster_name`;
+        : getModuleMapping(eks.type, project.provider)?.moduleSource === "aws-ia/eks-blueprints-addons/aws"
+          ? "var.aws_eks_cluster_name"
+          : getModuleMapping(eks.type, project.provider)?.moduleSource.startsWith("./")
+            ? `module.${moduleName(project, eks)}.name`
+            : `module.${moduleName(project, eks)}.cluster_name`;
     outputs.push(`output "eks_cluster_name" {
   description = "Kubernetes cluster name."
   value       = ${clusterValue}
@@ -1098,9 +1144,11 @@ function generateOutputs(project: ProjectState): string {
         ? `module.${moduleName(project, rds)}.id`
         : project.provider === "gcp"
           ? `module.${moduleName(project, rds)}.instance_connection_name`
-          : getModuleMapping(rds.type, project.provider)?.moduleSource.startsWith("./")
-            ? `module.${moduleName(project, rds)}.id`
-            : `module.${moduleName(project, rds)}.db_instance_endpoint`;
+          : getModuleMapping(rds.type, project.provider)?.moduleSource === "aws-ia/rds-aurora/aws"
+            ? `module.${moduleName(project, rds)}.aurora_cluster_endpoint`
+            : getModuleMapping(rds.type, project.provider)?.moduleSource.startsWith("./")
+              ? `module.${moduleName(project, rds)}.id`
+              : `module.${moduleName(project, rds)}.db_instance_endpoint`;
     outputs.push(`output "postgres_endpoint" {
   description = "PostgreSQL endpoint or connection identifier."
   value       = ${dbValue}
@@ -1237,6 +1285,9 @@ aws_kms_key_id = ""
 aws_launch_template_id = ""
 aws_launch_configuration_name = ""
 aws_shield_protected_resource_arn = ""
+aws_eks_cluster_name = "${sanitizeName(project.name)}-${project.environment}-eks"
+aws_eks_cluster_endpoint = ""
+aws_eks_oidc_provider_arn = ""
 # sensitive_database_password should be supplied through a secret manager or TF_VAR_sensitive_database_password.
 `;
 }
