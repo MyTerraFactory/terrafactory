@@ -21,14 +21,30 @@ const azureOptionalFields: ComponentDefinition["fields"] = [
   { key: "costAllocationTag", label: "Cost allocation tag", type: "text", placeholder: "platform-core", help: "Additional cost allocation tag value." }
 ];
 
+const azureVmSizeOptions = [
+  { label: "B2s - burstable small", value: "Standard_B2s" },
+  { label: "B4ms - burstable medium", value: "Standard_B4ms" },
+  { label: "D2s v5 - general purpose", value: "Standard_D2s_v5" },
+  { label: "D4s v5 - general purpose", value: "Standard_D4s_v5" },
+  { label: "D8s v5 - general purpose", value: "Standard_D8s_v5" },
+  { label: "E4s v5 - memory optimized", value: "Standard_E4s_v5" },
+  { label: "F4s v2 - compute optimized", value: "Standard_F4s_v2" }
+];
+
 function genericAzureFields(extra?: ComponentDefinition["fields"]): ComponentDefinition["fields"] {
-  return [
+  const extraFields = extra ?? [];
+  const extraKeys = new Set(extraFields.map((field) => field.key));
+  const baseFields: ComponentDefinition["fields"] = [
     { key: "sku", label: "SKU / tier", type: "text", required: true, placeholder: "Standard", help: "Provider-specific SKU, tier, or capacity family." },
     { key: "replicas", label: "Capacity", type: "number", required: true, min: 1, max: 1000, help: "Instance count, capacity units, partitions, or equivalent scale setting." },
     { key: "publicAccess", label: "Public access", type: "boolean", help: "Keep disabled for private production services unless an edge service requires it." },
     { key: "privateEndpoint", label: "Private endpoint", type: "boolean", help: "Adds private connectivity wiring where the module supports it." },
-    { key: "zoneMode", label: "Zone mode", type: "select", required: true, help: "Availability and placement strategy.", options: azureLocationOptions },
-    ...(extra ?? []),
+    { key: "zoneMode", label: "Zone mode", type: "select", required: true, help: "Availability and placement strategy.", options: azureLocationOptions }
+  ];
+
+  return [
+    ...baseFields.filter((field) => !extraKeys.has(field.key)),
+    ...extraFields,
     ...azureOptionalFields
   ];
 }
@@ -146,10 +162,12 @@ export const azureComponentDefinitions: ComponentDefinition[] = [
     dependsOn: ["vpc", "security-group"]
   },
   service("vm", "Virtual Machine", "Linux or Windows VM with managed disk, private networking, and optional public ingress.", 8, [
+    { key: "sku", label: "SKU / tier", type: "select", required: true, help: "Azure VM size.", options: azureVmSizeOptions },
     { key: "image", label: "Image", type: "select", required: true, help: "Base OS image.", options: [{ label: "Ubuntu 24.04 LTS", value: "Ubuntu2404" }, { label: "Windows Server 2022", value: "Windows2022" }, { label: "RHEL 9", value: "RHEL9" }] },
     { key: "adminUsername", label: "Admin username", type: "text", required: true, placeholder: "azureuser", help: "Admin username for the VM." }
   ]),
   service("vmss", "Virtual Machine Scale Set", "Autoscaling compute pool for stateless workloads.", 10, [
+    { key: "sku", label: "SKU / tier", type: "select", required: true, help: "Azure VMSS instance size.", options: azureVmSizeOptions },
     { key: "image", label: "Image", type: "select", required: true, help: "Base OS image.", options: [{ label: "Ubuntu 24.04 LTS", value: "Ubuntu2404" }, { label: "Windows Server 2022", value: "Windows2022" }] }
   ]),
   service("storage-account", "Storage Account", "Secure storage account with blob, queue, table, and file service support.", 7, [
@@ -251,7 +269,7 @@ export const azureModuleMappings: ModuleMapping[] = [
   { resourceType: "rds", provider: "azure", moduleSource: "claranet/db-postgresql-flexible/azurerm", version: "8.6.2", requiredInputs: ["administrator_login", "allowed_cidrs", "client_name", "environment", "location", "resource_group_name", "stack"], optionalInputs: ["administrator_password", "backup_retention_days", "delegated_subnet", "extra_tags", "high_availability", "logs_destinations_ids", "maintenance_window", "postgresql_version", "public_network_access_enabled", "size", "storage_mb"], notes: "Claranet PostgreSQL Flexible Server module." },
   { resourceType: "redis", provider: "azure", moduleSource: "claranet/redis/azurerm", version: "8.1.4", requiredInputs: ["client_name", "environment", "location", "resource_group_name", "stack"], optionalInputs: ["capacity", "extra_tags", "logs_destinations_ids", "minimum_tls_version", "public_network_access_enabled", "sku_name", "subnet_id"], notes: "Claranet Azure Redis module." },
   { resourceType: "alb", provider: "azure", moduleSource: "claranet/app-gateway/azurerm", version: "8.5.0", requiredInputs: ["client_name", "environment", "location", "resource_group_name", "stack"], optionalInputs: ["app_gateway_tags", "autoscale_configuration", "backend_address_pools", "backend_http_settings", "create_subnet", "extra_tags", "firewall_policy_id", "flow_log_enabled", "flow_log_retention_policy_days", "flow_log_storage_account_id", "force_firewall_policy_association", "frontend_ports", "http_listeners", "log_analytics_workspace_guid", "log_analytics_workspace_id", "logs_destinations_ids", "request_routing_rules", "sku", "sku_capacity", "ssl_certificates", "subnet_id", "zones"], notes: "Claranet Application Gateway module." },
-  { resourceType: "storage-account", provider: "azure", moduleSource: "claranet/storage-account/azurerm", version: "8.6.10", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "resource_group_name", "stack"], optionalInputs: ["account_kind", "account_tier", "custom_name", "extra_tags", "public_network_access_enabled"], notes: "Claranet Azure Storage Account module." },
+  { resourceType: "storage-account", provider: "azure", moduleSource: "Azure/avm-res-storage-storageaccount/azurerm", version: "0.7.1", requiredInputs: ["location", "name", "resource_group_name"], optionalInputs: ["account_kind", "account_replication_type", "account_tier", "managed_identities", "private_endpoints", "public_network_access_enabled", "shared_access_key_enabled", "tags"], notes: "AVM Azure Storage Account module with private endpoint support." },
   { resourceType: "key-vault", provider: "azure", moduleSource: "claranet/keyvault/azurerm", version: "8.2.1", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "resource_group_name", "stack"], optionalInputs: ["custom_name", "extra_tags", "public_network_access_enabled"], notes: "Claranet Azure Key Vault module." },
   { resourceType: "app-service", provider: "azure", moduleSource: "claranet/app-service/azurerm", version: "8.6.1", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "os_type", "resource_group_name", "sku_name", "stack"], optionalInputs: ["custom_name", "extra_tags", "public_network_access_enabled"], notes: "Claranet Azure App Service module." },
   { resourceType: "function-app", provider: "azure", moduleSource: "claranet/function-app/azurerm", version: "8.8.4", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "os_type", "resource_group_name", "stack"], optionalInputs: ["custom_name", "extra_tags", "public_network_access_enabled"], notes: "Claranet Azure Function App module." },
@@ -266,7 +284,7 @@ export const azureModuleMappings: ModuleMapping[] = [
   { resourceType: "mysql", provider: "azure", moduleSource: "claranet/db-mysql-flexible/azurerm", version: "8.3.5", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "resource_group_name", "stack"], optionalInputs: ["administrator_password", "custom_name", "extra_tags", "public_network_access_enabled", "sku_name"], notes: "Claranet Azure MySQL Flexible Server module." },
   { resourceType: "mssql", provider: "azure", moduleSource: "claranet/db-sql/azurerm", version: "8.4.3", requiredInputs: ["administrator_login", "administrator_password", "client_name", "environment", "location", "location_short", "logs_destinations_ids", "resource_group_name", "stack"], optionalInputs: ["custom_name", "extra_tags"], notes: "Claranet Azure SQL module." },
   { resourceType: "cosmos-db", provider: "azure", moduleSource: "claranet/cosmos-db/azurerm", version: "8.2.3", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "resource_group_name", "stack"], optionalInputs: ["custom_name", "extra_tags", "public_network_access_enabled"], notes: "Claranet Cosmos DB module." },
-  { resourceType: "event-hub", provider: "azure", moduleSource: "claranet/eventhub/azurerm", version: "8.1.3", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "namespace_parameters", "resource_group_name", "stack"], optionalInputs: ["custom_name", "extra_tags"], notes: "Claranet Event Hubs module." },
+  { resourceType: "event-hub", provider: "azure", moduleSource: "Azure/avm-res-eventhub-namespace/azurerm", version: "0.1.0", requiredInputs: ["location", "name", "resource_group_name"], optionalInputs: ["auto_inflate_enabled", "capacity", "event_hubs", "maximum_throughput_units", "private_endpoints", "public_network_access_enabled", "sku", "tags"], notes: "AVM Azure Event Hubs namespace module with child Event Hub support." },
   { resourceType: "service-bus", provider: "azure", moduleSource: "claranet/service-bus/azurerm", version: "8.1.3", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "resource_group_name", "stack"], optionalInputs: ["custom_name", "extra_tags"], notes: "Claranet Service Bus module." },
   { resourceType: "api-management", provider: "azure", moduleSource: "claranet/api-management/azurerm", version: "8.2.3", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "publisher_email", "publisher_name", "resource_group_name", "stack"], optionalInputs: ["custom_name", "extra_tags", "sku_name"], notes: "Claranet API Management module." },
   { resourceType: "data-factory", provider: "azure", moduleSource: "claranet/data-factory/azurerm", version: "8.1.3", requiredInputs: ["client_name", "environment", "location", "location_short", "logs_destinations_ids", "resource_group_name", "stack"], optionalInputs: ["custom_name", "extra_tags"], notes: "Claranet Data Factory module." },

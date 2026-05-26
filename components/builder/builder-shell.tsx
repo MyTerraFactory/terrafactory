@@ -5,6 +5,8 @@ import {
   ChevronDown,
   CheckCircle2,
   GitBranch,
+  Maximize2,
+  Minimize2,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
@@ -155,6 +157,7 @@ export function BuilderShell() {
   const [leftPanelWidth, setLeftPanelWidth] = useState(420);
   const [rightPanelWidth, setRightPanelWidth] = useState(560);
   const [isOptionalConfigOpen, setIsOptionalConfigOpen] = useState(false);
+  const [maximizedPanel, setMaximizedPanel] = useState<"canvas" | "preview" | null>(null);
   const builderPanelRef = useRef<HTMLElement | null>(null);
   const previewPanelRef = useRef<HTMLDivElement | null>(null);
   const definitions = getComponentDefinitions(project.provider);
@@ -233,6 +236,17 @@ export function BuilderShell() {
   useEffect(() => {
     localStorage.setItem("terrafactory.rightPanelWidth", String(rightPanelWidth));
   }, [rightPanelWidth]);
+
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMaximizedPanel(null);
+      }
+    }
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   function updateProject(patch: Partial<ProjectState>) {
     setProject((current) => ({ ...current, ...patch }));
@@ -542,11 +556,16 @@ export function BuilderShell() {
               <p className="text-xs uppercase tracking-[0.18em] text-teal-300">Visual Builder</p>
               <h2 className="text-xl font-semibold text-slate-50">Production stack canvas</h2>
             </div>
-            {selectedComponent && (
-              <Button onClick={() => removeComponent(selectedComponent.id)} title="Remove block">
-                <Trash2 size={16} /> Remove
+            <div className="flex gap-2">
+              <Button onClick={() => setMaximizedPanel("canvas")} title="Maximize canvas">
+                <Maximize2 size={16} /> Maximize
               </Button>
-            )}
+              {selectedComponent && (
+                <Button onClick={() => removeComponent(selectedComponent.id)} title="Remove block">
+                  <Trash2 size={16} /> Remove
+                </Button>
+              )}
+            </div>
           </div>
 
           <InfraGraph project={project} selectedId={selectedComponent?.id} onSelectComponent={setSelectedId} />
@@ -654,10 +673,31 @@ export function BuilderShell() {
               onDoubleClick={() => setRightPanelWidth(560)}
               onMouseDown={(event) => startPanelResize("right", event)}
             />
-            <CodePreview files={files} />
+            <CodePreview files={files} onMaximize={() => setMaximizedPanel("preview")} />
           </div>
         )}
       </div>
+
+      {maximizedPanel && (
+        <div className="fixed inset-0 z-[100] flex flex-col bg-slate-950/95 p-4 backdrop-blur-xl">
+          <div className="flex shrink-0 items-center justify-between border-b border-cyan-400/20 bg-slate-900 px-4 py-3 shadow-[0_12px_40px_rgba(2,6,23,0.3)]">
+            <div>
+              <p className="text-xs uppercase tracking-[0.18em] text-teal-300">{maximizedPanel === "canvas" ? "Visual Builder" : "Live Terraform"}</p>
+              <h2 className="text-lg font-semibold text-slate-50">{maximizedPanel === "canvas" ? "Production stack canvas" : "Generated project files"}</h2>
+            </div>
+            <Button onClick={() => setMaximizedPanel(null)} title="Exit maximized view">
+              <Minimize2 size={16} /> Restore
+            </Button>
+          </div>
+          <div className="min-h-0 flex-1 bg-slate-950 p-4">
+            {maximizedPanel === "canvas" ? (
+              <InfraGraph project={project} selectedId={selectedComponent?.id} onSelectComponent={setSelectedId} maximized />
+            ) : (
+              <CodePreview files={files} />
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
