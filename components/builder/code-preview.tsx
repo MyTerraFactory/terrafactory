@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { Copy, Download } from "lucide-react";
+import { Copy, Download, Maximize2 } from "lucide-react";
 import JSZip from "jszip";
 import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
@@ -11,9 +11,10 @@ const Monaco = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
 interface CodePreviewProps {
   files: GeneratedFile[];
+  onMaximize?: () => void;
 }
 
-export function CodePreview({ files }: CodePreviewProps) {
+export function CodePreview({ files, onMaximize }: CodePreviewProps) {
   const [activePath, setActivePath] = useState(files[0]?.path ?? "");
   const activeFile = useMemo(() => files.find((file) => file.path === activePath) ?? files[0], [activePath, files]);
 
@@ -45,6 +46,11 @@ export function CodePreview({ files }: CodePreviewProps) {
           <h2 className="text-base font-semibold text-slate-50">Generated project files</h2>
         </div>
         <div className="flex gap-2">
+          {onMaximize && (
+            <Button onClick={onMaximize} title="Maximize generated project files">
+              <Maximize2 size={16} /> Maximize
+            </Button>
+          )}
           <Button onClick={copyActiveFile} title="Copy active file">
             <Copy size={16} /> Copy
           </Button>

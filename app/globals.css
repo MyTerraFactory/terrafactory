@@ -42,6 +42,50 @@ textarea {
   display: none;
 }
 
+.react-flow__controls {
+  overflow: hidden;
+  border: 1px solid rgba(45, 212, 191, 0.45);
+  border-radius: 6px;
+  background: #020617;
+  box-shadow: 0 12px 30px rgba(2, 6, 23, 0.32);
+}
+
+.react-flow__controls-button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  background: #020617 !important;
+  color: #f8fafc !important;
+  fill: #f8fafc !important;
+  transition: background-color 140ms ease, color 140ms ease;
+}
+
+.react-flow__controls-button:hover {
+  background: #0f766e !important;
+  color: #ffffff !important;
+  fill: #ffffff !important;
+}
+
+.react-flow__controls-button svg {
+  max-width: 18px;
+  max-height: 18px;
+  color: currentColor !important;
+  fill: currentColor !important;
+  stroke: currentColor !important;
+}
+
+.react-flow__controls-button svg path,
+.react-flow__controls-button svg rect,
+.react-flow__controls-button svg line {
+  fill: currentColor !important;
+  stroke: currentColor !important;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: 0;
+}
+
 .tf-workspace {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -158,4 +202,32 @@ textarea {
 :root[data-theme="light"] textarea {
   background-color: #ffffff !important;
   color: #0f172a !important;
+}
+
+:root[data-theme="light"] .react-flow__controls {
+  border-color: rgba(15, 23, 42, 0.14);
+  background: #ffffff;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+}
+
+:root[data-theme="light"] .react-flow__controls-button {
+  border-bottom-color: rgba(15, 23, 42, 0.14);
+  background: #ffffff !important;
+  color: #0f172a !important;
+  fill: #0f172a !important;
+}
+
+:root[data-theme="light"] .react-flow__controls-button:hover {
+  background: #f1f5f9 !important;
+  color: #0f172a !important;
+  fill: #0f172a !important;
+}
+
+:root[data-theme="light"] .react-flow__controls-button svg,
+:root[data-theme="light"] .react-flow__controls-button svg path,
+:root[data-theme="light"] .react-flow__controls-button svg rect,
+:root[data-theme="light"] .react-flow__controls-button svg line {
+  color: #0f172a !important;
+  fill: currentColor !important;
+  stroke: currentColor !important;
 }
