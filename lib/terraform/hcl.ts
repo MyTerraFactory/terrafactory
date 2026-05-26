@@ -678,6 +678,7 @@ function azureModuleBody(project: ProjectState, component: InfraComponent, base:
         logs_destinations_ids: "var.azure_diagnostic_destination_ids",
         os_type: "Linux",
         sku_name: component.config.sku,
+        sku_size: component.config.sku,
         sku: component.type === "expressroute" ? { tier: "Standard", family: "MeteredData" } : component.config.sku,
         capacity: component.config.replicas,
         zone: component.config.zoneMode === "zonal" ? "1" : null,

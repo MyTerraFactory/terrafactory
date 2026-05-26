@@ -21,14 +21,30 @@ const azureOptionalFields: ComponentDefinition["fields"] = [
   { key: "costAllocationTag", label: "Cost allocation tag", type: "text", placeholder: "platform-core", help: "Additional cost allocation tag value." }
 ];
 
+const azureVmSizeOptions = [
+  { label: "B2s - burstable small", value: "Standard_B2s" },
+  { label: "B4ms - burstable medium", value: "Standard_B4ms" },
+  { label: "D2s v5 - general purpose", value: "Standard_D2s_v5" },
+  { label: "D4s v5 - general purpose", value: "Standard_D4s_v5" },
+  { label: "D8s v5 - general purpose", value: "Standard_D8s_v5" },
+  { label: "E4s v5 - memory optimized", value: "Standard_E4s_v5" },
+  { label: "F4s v2 - compute optimized", value: "Standard_F4s_v2" }
+];
+
 function genericAzureFields(extra?: ComponentDefinition["fields"]): ComponentDefinition["fields"] {
-  return [
+  const extraFields = extra ?? [];
+  const extraKeys = new Set(extraFields.map((field) => field.key));
+  const baseFields: ComponentDefinition["fields"] = [
     { key: "sku", label: "SKU / tier", type: "text", required: true, placeholder: "Standard", help: "Provider-specific SKU, tier, or capacity family." },
     { key: "replicas", label: "Capacity", type: "number", required: true, min: 1, max: 1000, help: "Instance count, capacity units, partitions, or equivalent scale setting." },
     { key: "publicAccess", label: "Public access", type: "boolean", help: "Keep disabled for private production services unless an edge service requires it." },
     { key: "privateEndpoint", label: "Private endpoint", type: "boolean", help: "Adds private connectivity wiring where the module supports it." },
-    { key: "zoneMode", label: "Zone mode", type: "select", required: true, help: "Availability and placement strategy.", options: azureLocationOptions },
-    ...(extra ?? []),
+    { key: "zoneMode", label: "Zone mode", type: "select", required: true, help: "Availability and placement strategy.", options: azureLocationOptions }
+  ];
+
+  return [
+    ...baseFields.filter((field) => !extraKeys.has(field.key)),
+    ...extraFields,
     ...azureOptionalFields
   ];
 }
@@ -146,10 +162,12 @@ export const azureComponentDefinitions: ComponentDefinition[] = [
     dependsOn: ["vpc", "security-group"]
   },
   service("vm", "Virtual Machine", "Linux or Windows VM with managed disk, private networking, and optional public ingress.", 8, [
+    { key: "sku", label: "SKU / tier", type: "select", required: true, help: "Azure VM size.", options: azureVmSizeOptions },
     { key: "image", label: "Image", type: "select", required: true, help: "Base OS image.", options: [{ label: "Ubuntu 24.04 LTS", value: "Ubuntu2404" }, { label: "Windows Server 2022", value: "Windows2022" }, { label: "RHEL 9", value: "RHEL9" }] },
     { key: "adminUsername", label: "Admin username", type: "text", required: true, placeholder: "azureuser", help: "Admin username for the VM." }
   ]),
   service("vmss", "Virtual Machine Scale Set", "Autoscaling compute pool for stateless workloads.", 10, [
+    { key: "sku", label: "SKU / tier", type: "select", required: true, help: "Azure VMSS instance size.", options: azureVmSizeOptions },
     { key: "image", label: "Image", type: "select", required: true, help: "Base OS image.", options: [{ label: "Ubuntu 24.04 LTS", value: "Ubuntu2404" }, { label: "Windows Server 2022", value: "Windows2022" }] }
   ]),
   service("storage-account", "Storage Account", "Secure storage account with blob, queue, table, and file service support.", 7, [
