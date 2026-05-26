@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "TerraFactory",
-  description: "Visual Terraform Infrastructure Composer for production AWS stacks.",
+  description: "Visual Terraform Infrastructure Composer for production-ready cloud stacks.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",
