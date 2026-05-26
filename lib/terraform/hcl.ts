@@ -1324,25 +1324,25 @@ function generateOutputs(project: ProjectState): string {
       switch (component.type) {
         case "vpc":
           return [
-            outputBlock("vpc_id", "Created VPC ID.", `${moduleAddress}.vpc_attributes.id`),
-            outputBlock(outputName(component, "public_subnet_ids"), `${component.name} public subnet IDs.`, `values(${moduleAddress}.public_subnet_attributes_by_az)[*].id`),
-            outputBlock(outputName(component, "private_subnet_ids"), `${component.name} private subnet IDs.`, `values(${moduleAddress}.private_subnet_attributes_by_az)[*].id`)
+            outputBlock("vpc_id", "Created VPC ID.", `try(${moduleAddress}.vpc_attributes.id, ${moduleAddress}.vpc_id, ${moduleAddress}.id, null)`),
+            outputBlock(outputName(component, "public_subnet_ids"), `${component.name} public subnet IDs.`, `try(values(${moduleAddress}.public_subnet_attributes_by_az)[*].id, ${moduleAddress}.public_subnet_ids, [])`),
+            outputBlock(outputName(component, "private_subnet_ids"), `${component.name} private subnet IDs.`, `try(values(${moduleAddress}.private_subnet_attributes_by_az)[*].id, ${moduleAddress}.private_subnet_ids, [])`)
           ];
         case "eks":
           return [outputBlock("eks_cluster_name", "EKS cluster name referenced by the AWS-IA add-ons module.", "var.aws_eks_cluster_name")];
         case "rds":
         case "aurora":
           return [
-            outputBlock(outputName(component, "endpoint"), `${component.name} Aurora cluster endpoint.`, `${moduleAddress}.aurora_cluster_endpoint`, true),
-            outputBlock(outputName(component, "reader_endpoint"), `${component.name} Aurora reader endpoint.`, `${moduleAddress}.aurora_cluster_reader_endpoint`, true)
+            outputBlock(outputName(component, "endpoint"), `${component.name} Aurora cluster endpoint.`, `try(${moduleAddress}.aurora_cluster_endpoint, ${moduleAddress}.cluster_endpoint, ${moduleAddress}.endpoint, null)`, true),
+            outputBlock(outputName(component, "reader_endpoint"), `${component.name} Aurora reader endpoint.`, `try(${moduleAddress}.aurora_cluster_reader_endpoint, ${moduleAddress}.reader_endpoint, null)`, true)
           ];
         case "ecs":
           return [
-            outputBlock(outputName(component, "cluster_id"), `${component.name} ECS cluster ID.`, `${moduleAddress}.ecs_cluster_id`),
-            outputBlock(outputName(component, "cluster_arn"), `${component.name} ECS cluster ARN.`, `${moduleAddress}.ecs_cluster_arn`)
+            outputBlock(outputName(component, "cluster_id"), `${component.name} ECS cluster ID.`, `try(${moduleAddress}.ecs_cluster_id, ${moduleAddress}.cluster_id, ${moduleAddress}.id, null)`),
+            outputBlock(outputName(component, "cluster_arn"), `${component.name} ECS cluster ARN.`, `try(${moduleAddress}.ecs_cluster_arn, ${moduleAddress}.cluster_arn, ${moduleAddress}.arn, null)`)
           ];
         case "fargate-service":
-          return [outputBlock(outputName(component, "public_lb_dns_name"), `${component.name} public load balancer DNS name.`, `${moduleAddress}.public_lb_dns_name`)];
+          return [outputBlock(outputName(component, "public_lb_dns_name"), `${component.name} public load balancer DNS name.`, `try(${moduleAddress}.public_lb_dns_name, ${moduleAddress}.alb_dns_name, null)`)];
         default:
           return generic;
       }
@@ -1352,32 +1352,32 @@ function generateOutputs(project: ProjectState): string {
       switch (component.type) {
         case "vpc":
           return [
-            outputBlock("vpc_id", "Created VNet ID.", `${moduleAddress}.id`),
-            outputBlock(outputName(component, "name"), `${component.name} VNet name.`, `try(${moduleAddress}.name, null)`)
+            outputBlock("vpc_id", "Created VNet ID.", `try(${moduleAddress}.id, ${moduleAddress}.vnet_id, ${moduleAddress}.resource.id, null)`),
+            outputBlock(outputName(component, "name"), `${component.name} VNet name.`, `try(${moduleAddress}.name, ${moduleAddress}.vnet_name, ${moduleAddress}.resource.name, null)`)
           ];
         case "eks":
           return [
-            outputBlock("eks_cluster_name", "AKS cluster name.", `${moduleAddress}.name`),
-            outputBlock(outputName(component, "id"), `${component.name} AKS resource ID.`, `try(${moduleAddress}.id, null)`)
+            outputBlock("eks_cluster_name", "AKS cluster name.", `try(${moduleAddress}.name, ${moduleAddress}.aks_name, ${moduleAddress}.resource.name, null)`),
+            outputBlock(outputName(component, "id"), `${component.name} AKS resource ID.`, `try(${moduleAddress}.id, ${moduleAddress}.aks_id, ${moduleAddress}.resource.id, null)`)
           ];
         case "rds":
           return [
-            outputBlock("postgres_endpoint", "PostgreSQL resource ID or endpoint identifier.", `try(${moduleAddress}.id, ${moduleAddress}.resource.id, null)`, true),
+            outputBlock("postgres_endpoint", "PostgreSQL resource ID or endpoint identifier.", `try(${moduleAddress}.fqdn, ${moduleAddress}.endpoint, ${moduleAddress}.id, ${moduleAddress}.resource.id, null)`, true),
             outputBlock(outputName(component, "name"), `${component.name} PostgreSQL server name.`, `try(${moduleAddress}.name, ${moduleAddress}.resource.name, null)`)
           ];
         case "storage-account":
           return [
-            outputBlock(outputName(component, "id"), `${component.name} storage account ID.`, `${moduleAddress}.resource_id`),
-            outputBlock(outputName(component, "name"), `${component.name} storage account name.`, `${moduleAddress}.name`),
-            outputBlock(outputName(component, "private_endpoints"), `${component.name} storage private endpoints.`, `${moduleAddress}.private_endpoints`),
-            outputBlock(outputName(component, "containers"), `${component.name} blob containers.`, `${moduleAddress}.containers`),
-            outputBlock(outputName(component, "queues"), `${component.name} storage queues.`, `${moduleAddress}.queues`)
+            outputBlock(outputName(component, "id"), `${component.name} storage account ID.`, `try(${moduleAddress}.resource_id, ${moduleAddress}.id, ${moduleAddress}.resource.id, null)`),
+            outputBlock(outputName(component, "name"), `${component.name} storage account name.`, `try(${moduleAddress}.name, ${moduleAddress}.resource.name, null)`),
+            outputBlock(outputName(component, "private_endpoints"), `${component.name} storage private endpoints.`, `try(${moduleAddress}.private_endpoints, {})`),
+            outputBlock(outputName(component, "containers"), `${component.name} blob containers.`, `try(${moduleAddress}.containers, {})`),
+            outputBlock(outputName(component, "queues"), `${component.name} storage queues.`, `try(${moduleAddress}.queues, {})`)
           ];
         case "event-hub":
           return [
-            outputBlock(outputName(component, "id"), `${component.name} Event Hub namespace ID.`, `${moduleAddress}.resource_id`),
-            outputBlock(outputName(component, "event_hubs"), `${component.name} child Event Hubs.`, `${moduleAddress}.resource_eventhubs`),
-            outputBlock(outputName(component, "private_endpoints"), `${component.name} Event Hub private endpoints.`, `${moduleAddress}.private_endpoints`)
+            outputBlock(outputName(component, "id"), `${component.name} Event Hub namespace ID.`, `try(${moduleAddress}.resource_id, ${moduleAddress}.id, ${moduleAddress}.resource.id, null)`),
+            outputBlock(outputName(component, "event_hubs"), `${component.name} child Event Hubs.`, `try(${moduleAddress}.resource_eventhubs, {})`),
+            outputBlock(outputName(component, "private_endpoints"), `${component.name} Event Hub private endpoints.`, `try(${moduleAddress}.private_endpoints, {})`)
           ];
         default:
           return generic;
@@ -1388,14 +1388,14 @@ function generateOutputs(project: ProjectState): string {
       switch (component.type) {
         case "vpc":
           return [
-            outputBlock("vpc_id", "Created VPC network ID.", `${moduleAddress}.network_id`),
-            outputBlock(outputName(component, "network_name"), `${component.name} network name.`, `${moduleAddress}.network_name`),
-            outputBlock(outputName(component, "network_self_link"), `${component.name} network self link.`, `${moduleAddress}.network_self_link`)
+            outputBlock("vpc_id", "Created VPC network ID.", `try(${moduleAddress}.network_id, ${moduleAddress}.id, null)`),
+            outputBlock(outputName(component, "network_name"), `${component.name} network name.`, `try(${moduleAddress}.network_name, ${moduleAddress}.name, null)`),
+            outputBlock(outputName(component, "network_self_link"), `${component.name} network self link.`, `try(${moduleAddress}.network_self_link, ${moduleAddress}.self_link, null)`)
           ];
         case "eks":
-          return [outputBlock("eks_cluster_name", "GKE cluster name.", `${moduleAddress}.name`)];
+          return [outputBlock("eks_cluster_name", "GKE cluster name.", `try(${moduleAddress}.name, ${moduleAddress}.cluster_name, null)`)];
         case "rds":
-          return [outputBlock("postgres_endpoint", "Cloud SQL instance connection name.", `${moduleAddress}.instance_connection_name`, true)];
+          return [outputBlock("postgres_endpoint", "Cloud SQL instance connection name.", `try(${moduleAddress}.instance_connection_name, ${moduleAddress}.connection_name, ${moduleAddress}.self_link, null)`, true)];
         default:
           return generic;
       }
