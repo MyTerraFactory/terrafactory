@@ -17,7 +17,9 @@ function recommendationFor(project: ProjectState): string {
   }
 
   if (enabled.has("rds")) {
-    notes.push("RDS is configured as a sensitive tier; keep passwords outside tfvars and prefer Secrets Manager or injected TF_VAR values.");
+    const databaseName =
+      project.provider === "azure" ? "Azure PostgreSQL Flexible Server" : project.provider === "gcp" ? "Cloud SQL" : "RDS";
+    notes.push(`${databaseName} is configured as a sensitive tier; keep passwords outside tfvars and prefer secret manager or injected TF_VAR values.`);
   }
 
   if (!enabled.has("redis")) {

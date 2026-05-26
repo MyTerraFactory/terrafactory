@@ -32,7 +32,7 @@ import type { CloudProvider, ComponentDefinition, ComponentField, ComponentType,
 const providers: { id: CloudProvider; label: string; status: string }[] = [
   { id: "aws", label: "AWS", status: "MVP ready" },
   { id: "azure", label: "Azure", status: "MVP ready" },
-  { id: "gcp", label: "GCP", status: "MVP ready" }
+  { id: "gcp", label: "GCP", status: "Preview" }
 ];
 
 interface VersionSnapshot {
@@ -70,7 +70,7 @@ function createComponent(definition: ComponentDefinition): InfraComponent {
   return {
     id: `cmp_${definition.type}_${crypto.randomUUID().slice(0, 8)}`,
     type: definition.type,
-    name: definition.type,
+    name: definition.type === "rds" ? "postgres" : definition.type,
     enabled: true,
     config
   };
@@ -384,8 +384,8 @@ export function BuilderShell() {
   const optionalFields = selectedDefinition?.fields.filter((field) => !field.required) ?? [];
 
   return (
-    <main className="flex min-h-screen flex-col">
-      <header className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-3 border-b border-cyan-400/20 bg-slate-950/90 px-4 py-3 shadow-[0_10px_34px_rgba(2,6,23,0.28),0_1px_0_rgba(45,212,191,0.12)] backdrop-blur-xl">
+    <main className="flex h-dvh min-h-0 flex-col overflow-hidden">
+      <header className="z-50 flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-cyan-400/20 bg-slate-950/90 px-4 py-3 shadow-[0_10px_34px_rgba(2,6,23,0.28),0_1px_0_rgba(45,212,191,0.12)] backdrop-blur-xl">
         <div className="flex min-w-0 items-center">
           <Image
             alt="TerraFactory"
@@ -448,7 +448,7 @@ export function BuilderShell() {
       </header>
 
       <div
-        className="tf-workspace min-h-0 flex-1"
+        className="tf-workspace min-h-0 flex-1 overflow-hidden"
         data-left-open={isLeftPanelOpen}
         data-right-open={isRightPanelOpen}
         style={workspaceStyle}
@@ -646,7 +646,7 @@ export function BuilderShell() {
         </section>
 
         {isRightPanelOpen && (
-          <div ref={previewPanelRef} className="relative min-h-0 scroll-mt-20">
+          <div ref={previewPanelRef} className="relative h-full min-h-0 scroll-mt-20 overflow-hidden">
             <div
               aria-label="Resize preview panel"
               className="tf-resize-handle tf-resize-handle-right"
