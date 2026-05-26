@@ -3,6 +3,7 @@
 import { Background, Controls, ReactFlow, type Edge, type Node } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { useMemo } from "react";
+import { getComponentDefinitions } from "@/lib/registry/catalog";
 import type { ProjectState } from "@/lib/types";
 
 interface InfraGraphProps {
@@ -14,6 +15,7 @@ interface InfraGraphProps {
 export function InfraGraph({ project, selectedId, onSelectComponent }: InfraGraphProps) {
   const { nodes, edges } = useMemo(() => {
     const enabled = project.components.filter((component) => component.enabled);
+    const definitions = getComponentDefinitions(project.provider);
     const calculatedNodes: Node[] = [
       {
         id: "boundary",
@@ -26,13 +28,15 @@ export function InfraGraph({ project, selectedId, onSelectComponent }: InfraGrap
 
     const calculatedEdges: Edge[] = [];
     enabled.forEach((component, index) => {
+      const definition = definitions.find((item) => item.type === component.type);
+      const componentName = component.type === "rds" && component.name === "rds" ? "postgres" : component.name;
       const x = 240 + (index % 2) * 220;
       const y = 20 + Math.floor(index / 2) * 110;
       const isSelected = component.id === selectedId;
       calculatedNodes.push({
         id: component.id,
         position: { x, y },
-        data: { label: `${component.type.toUpperCase()}\n${component.name}` },
+        data: { label: `${definition?.label ?? component.type}\n${componentName}` },
         selected: isSelected,
         style: {
           background: isSelected ? "#134e4a" : "#172033",
@@ -50,7 +54,7 @@ export function InfraGraph({ project, selectedId, onSelectComponent }: InfraGrap
   }, [project, selectedId]);
 
   return (
-    <div className="h-[260px] overflow-hidden rounded-md border border-slate-700/70 bg-slate-950">
+    <div className="h-[clamp(190px,24vh,260px)] overflow-hidden rounded-md border border-slate-700/70 bg-slate-950">
       <ReactFlow
         nodes={nodes}
         edges={edges}

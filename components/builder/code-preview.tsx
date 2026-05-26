@@ -38,8 +38,8 @@ export function CodePreview({ files }: CodePreviewProps) {
   }
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden border-l border-slate-700/70 bg-[#091322]">
-      <div className="flex items-center justify-between border-b border-slate-700/70 px-4 py-3">
+    <section className="flex h-full min-h-0 flex-col overflow-hidden border-l border-slate-700/70 bg-[#091322]">
+      <div className="flex shrink-0 items-center justify-between border-b border-slate-700/70 px-4 py-3">
         <div>
           <p className="text-xs uppercase tracking-[0.18em] text-teal-300">Live Terraform</p>
           <h2 className="text-base font-semibold text-slate-50">Generated project files</h2>
@@ -54,7 +54,7 @@ export function CodePreview({ files }: CodePreviewProps) {
         </div>
       </div>
 
-      <div className="flex gap-1 overflow-x-auto border-b border-slate-700/70 px-3 py-2">
+      <div className="flex shrink-0 gap-1 overflow-x-auto border-b border-slate-700/70 px-3 py-2">
         {files.map((file) => (
           <button
             key={file.path}
@@ -66,13 +66,21 @@ export function CodePreview({ files }: CodePreviewProps) {
         ))}
       </div>
 
-      <div className="h-[560px] min-h-[560px] flex-none xl:h-[calc(100vh-150px)] xl:min-h-[520px]">
+      <div className="min-h-0 flex-1">
         <Monaco
           height="100%"
           language={activeFile?.language === "markdown" ? "markdown" : "hcl"}
           theme="vs-dark"
           value={activeFile?.content ?? ""}
-          options={{ readOnly: true, minimap: { enabled: false }, fontSize: 13, wordWrap: "on", scrollBeyondLastLine: false }}
+          options={{
+            automaticLayout: true,
+            readOnly: true,
+            minimap: { enabled: false },
+            fontSize: 13,
+            wordWrap: "on",
+            scrollBeyondLastLine: false,
+            scrollbar: { alwaysConsumeMouseWheel: false }
+          }}
         />
       </div>
     </section>

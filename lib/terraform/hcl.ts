@@ -38,8 +38,10 @@ function toHclValue(value: unknown, indent = 0): string {
       value.startsWith("azurerm_") ||
       value.startsWith("google_") ||
       value.startsWith("aws_") ||
+      value.startsWith("jsonencode(") ||
       value.startsWith("merge(") ||
-      value.startsWith("try("))
+      value.startsWith("try(") ||
+      value.startsWith("values("))
   ) {
     return value;
   }
@@ -59,13 +61,78 @@ function sanitizeName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-function moduleName(component: InfraComponent): string {
-  return `${component.type.replaceAll("-", "_")}_${sanitizeName(component.name).replaceAll("-", "_")}`;
+function moduleTypeLabel(project: ProjectState, component: InfraComponent): string {
+  if (project.provider === "azure") {
+    const azureLabels: Partial<Record<InfraComponent["type"], string>> = {
+      "security-group": "nsg",
+      alb: "application_gateway",
+      eks: "aks",
+      rds: "postgresql",
+      vpc: "vnet"
+    };
+
+    return azureLabels[component.type] ?? component.type.replaceAll("-", "_");
+  }
+
+  if (project.provider === "gcp") {
+    const gcpLabels: Partial<Record<InfraComponent["type"], string>> = {
+      "security-group": "firewall",
+      alb: "https_lb",
+      eks: "gke",
+      rds: "cloud_sql"
+    };
+
+    return gcpLabels[component.type] ?? component.type.replaceAll("-", "_");
+  }
+
+  return component.type.replaceAll("-", "_");
+}
+
+function moduleName(project: ProjectState, component: InfraComponent): string {
+  const componentName = component.type === "rds" && sanitizeName(component.name) === "rds" ? "postgres" : component.name;
+  return `${moduleTypeLabel(project, component)}_${sanitizeName(componentName).replaceAll("-", "_")}`;
 }
 
 function moduleRef(project: ProjectState, type: InfraComponent["type"], output: string): string {
   const component = enabledComponents(project).find((item) => item.type === type);
-  return component ? `module.${moduleName(component)}.${output}` : `module.${type.replace("-", "_")}.${output}`;
+  return component ? `module.${moduleName(project, component)}.${output}` : `module.${type.replace("-", "_")}.${output}`;
+}
+
+function awsVpcId(project: ProjectState): string {
+  return moduleRef(project, "vpc", "vpc_attributes.id");
+}
+
+function awsPrivateSubnetIds(project: ProjectState): string {
+  return `values(${moduleRef(project, "vpc", "private_subnet_attributes_by_az")})[*].id`;
+}
+
+function awsPublicSubnetIds(project: ProjectState): string {
+  return `values(${moduleRef(project, "vpc", "public_subnet_attributes_by_az")})[*].id`;
+}
+
+function awsSecurityGroupId(project: ProjectState): string {
+  return moduleRef(project, "security-group", "id");
+}
+
+function awsVpcFlowLogs(component: InfraComponent): Record<string, unknown> {
+  if (!component.config.enableAuditLogs && !component.config.enableMonitoring) {
+    return { log_destination_type: "none" };
+  }
+
+  return {
+    log_destination_type: "cloudwatch",
+    retention_in_days: component.config.backupRetentionDays ?? 30,
+    tags: componentTags(component, "{}")
+  };
+}
+
+function awsEndpointShortName(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) {
+    return "s3";
+  }
+
+  const parts = value.trim().split(".");
+  return parts[parts.length - 1] || value.trim();
 }
 
 function locationShort(project: ProjectState): string {
@@ -95,6 +162,18 @@ function componentTags(component: InfraComponent, baseTagExpression = "local.tag
   const tags: Record<string, string> = {};
   const dataClassification = component.config.dataClassification;
   const costAllocationTag = component.config.costAllocationTag;
+  const optionalTagKeys: Record<string, string> = {
+    enableEncryption: "EncryptionEnabled",
+    backupRetentionDays: "BackupRetentionDays",
+    deletionProtection: "DeletionProtectionRequested",
+    enableMonitoring: "MonitoringEnabled",
+    enableAuditLogs: "AuditLogsEnabled",
+    maintenanceWindow: "MaintenanceWindow",
+    privateDns: "PrivateDnsRequested",
+    autoscaling: "AutoscalingEnabled",
+    minCapacity: "MinCapacity",
+    maxCapacity: "MaxCapacity"
+  };
 
   if (typeof dataClassification === "string" && dataClassification) {
     tags.DataClassification = dataClassification;
@@ -104,11 +183,102 @@ function componentTags(component: InfraComponent, baseTagExpression = "local.tag
     tags.CostAllocation = costAllocationTag;
   }
 
+  for (const [configKey, tagKey] of Object.entries(optionalTagKeys)) {
+    const value = component.config[configKey];
+    if (value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0)) {
+      tags[tagKey] = String(value);
+    }
+  }
+
   if (Object.keys(tags).length === 0) {
     return baseTagExpression;
   }
 
   return `merge(${baseTagExpression}, ${toHclValue(tags, 2)})`;
+}
+
+function azureDiagnostics(component: InfraComponent): Record<string, unknown> {
+  const diagnosticsEnabled = Boolean(component.config.enableMonitoring || component.config.enableAuditLogs);
+
+  if (!diagnosticsEnabled) {
+    return {};
+  }
+
+  return {
+    logs_destinations_ids: "var.azure_diagnostic_destination_ids"
+  };
+}
+
+function azureFlowLogs(component: InfraComponent): Record<string, unknown> {
+  if (!component.config.enableAuditLogs && !component.config.enableMonitoring) {
+    return {};
+  }
+
+  return {
+    flow_log_enabled: true,
+    flow_log_storage_account_id: "var.azure_flow_log_storage_account_id",
+    log_analytics_workspace_id: "var.azure_log_analytics_workspace_id",
+    log_analytics_workspace_guid: "var.azure_log_analytics_workspace_guid",
+    flow_log_retention_policy_days: component.config.backupRetentionDays
+  };
+}
+
+function azureMaintenanceWindow(value: unknown): Record<string, number> | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+
+  const dayMap: Record<string, number> = {
+    sun: 0,
+    mon: 1,
+    tue: 2,
+    wed: 3,
+    thu: 4,
+    fri: 5,
+    sat: 6
+  };
+  const match = value.trim().match(/^(sun|mon|tue|wed|thu|fri|sat)\w*\s+(\d{1,2})(?::(\d{2}))?/i);
+
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    day_of_week: dayMap[match[1].slice(0, 3).toLowerCase()],
+    start_hour: Number(match[2]),
+    start_minute: Number(match[3] ?? 0)
+  };
+}
+
+function azureZoneList(component: InfraComponent): number[] | undefined {
+  return component.config.zoneMode === "zonal" ? [1] : component.config.zoneMode === "regional" ? [1, 2, 3] : undefined;
+}
+
+function gcpLabels(component: InfraComponent): Record<string, string> {
+  const labels: Record<string, string> = {};
+  const labelKeys: Record<string, string> = {
+    dataClassification: "data_classification",
+    costAllocationTag: "cost_allocation",
+    enableEncryption: "encryption_enabled",
+    backupRetentionDays: "backup_retention_days",
+    deletionProtection: "deletion_protection_requested",
+    enableMonitoring: "monitoring_enabled",
+    enableAuditLogs: "audit_logs_enabled",
+    maintenanceWindow: "maintenance_window",
+    privateDns: "private_dns_requested",
+    autoscaling: "autoscaling_enabled",
+    minCapacity: "min_capacity",
+    maxCapacity: "max_capacity"
+  };
+
+  for (const [configKey, labelKey] of Object.entries(labelKeys)) {
+    const value = component.config[configKey];
+    if (value !== undefined && value !== "" && !(Array.isArray(value) && value.length === 0)) {
+      labels[labelKey] = String(value).toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 63);
+    }
+  }
+
+  return labels;
 }
 
 function optionalConfig(component: InfraComponent): Record<string, unknown> {
@@ -131,7 +301,7 @@ function optionalConfig(component: InfraComponent): Record<string, unknown> {
 function alignRegistryModuleInputs(project: ProjectState, component: InfraComponent, body: Record<string, unknown>): Record<string, unknown> {
   const mapping = getModuleMapping(component.type, project.provider);
 
-  if (!mapping || mapping.moduleSource.startsWith("./") || !mapping.moduleSource.startsWith("claranet/")) {
+  if (!mapping || mapping.moduleSource.startsWith("./")) {
     return body;
   }
 
@@ -159,24 +329,35 @@ function componentModuleBody(project: ProjectState, component: InfraComponent): 
 }
 
 function awsModuleBody(project: ProjectState, component: InfraComponent, base: Record<string, unknown>): Record<string, unknown> {
+  const mapping = getModuleMapping(component.type, project.provider);
+
   switch (component.type) {
     case "vpc":
       return {
         ...base,
         name: "${local.name_prefix}-network",
-        cidr: component.config.cidr,
+        cidr_block: component.config.cidr,
         az_count: component.config.azCount,
-        enable_nat_gateway: component.config.enableNatGateway,
-        public_subnet_tags: { Tier: "public" },
-        private_subnet_tags: { Tier: "private" },
-        database_subnet_tags: { Tier: "database" },
+        subnets: {
+          public: {
+            netmask: 24,
+            nat_gateway_configuration: component.config.enableNatGateway ? "single_az" : "none",
+            tags: { Tier: "public" }
+          },
+          private: {
+            netmask: 24,
+            connect_to_public_natgw: component.config.enableNatGateway,
+            tags: { Tier: "private" }
+          }
+        },
+        vpc_flow_logs: awsVpcFlowLogs(component),
         tags: componentTags(component)
       };
     case "security-group":
       return {
         ...base,
         name: "${local.name_prefix}-baseline",
-        vpc_id: moduleRef(project, "vpc", "vpc_id"),
+        vpc_id: awsVpcId(project),
         ingress_cidr_blocks: component.config.allowedCidrBlocks,
         enable_ssh: component.config.enableSsh,
         egress_rules: ["all-all"],
@@ -187,8 +368,8 @@ function awsModuleBody(project: ProjectState, component: InfraComponent, base: R
         ...base,
         cluster_name: "${local.name_prefix}-eks",
         cluster_version: component.config.clusterVersion,
-        vpc_id: moduleRef(project, "vpc", "vpc_id"),
-        subnet_ids: moduleRef(project, "vpc", "private_subnets"),
+        vpc_id: awsVpcId(project),
+        subnet_ids: awsPrivateSubnetIds(project),
         cluster_endpoint_private_access: component.config.privateEndpoint,
         cluster_enabled_log_types: component.config.enableAuditLogs ? ["api", "audit", "authenticator", "controllerManager", "scheduler"] : [],
         cluster_log_retention_in_days: component.config.backupRetentionDays,
@@ -212,8 +393,8 @@ function awsModuleBody(project: ProjectState, component: InfraComponent, base: R
         instance_class: component.config.instanceClass,
         allocated_storage: component.config.allocatedStorage,
         multi_az: component.config.multiAz,
-        subnet_ids: moduleRef(project, "vpc", "database_subnets"),
-        vpc_security_group_ids: [moduleRef(project, "security-group", "security_group_id")],
+        subnet_ids: awsPrivateSubnetIds(project),
+        vpc_security_group_ids: [awsSecurityGroupId(project)],
         storage_encrypted: component.config.enableEncryption ?? true,
         deletion_protection: component.config.deletionProtection || project.environment === "prod",
         backup_retention_period: component.config.backupRetentionDays,
@@ -227,8 +408,8 @@ function awsModuleBody(project: ProjectState, component: InfraComponent, base: R
         node_type: component.config.nodeType,
         replicas_per_node_group: component.config.replicas,
         transit_encryption_enabled: component.config.transitEncryption,
-        subnet_ids: moduleRef(project, "vpc", "private_subnets"),
-        security_group_ids: [moduleRef(project, "security-group", "security_group_id")],
+        subnet_ids: awsPrivateSubnetIds(project),
+        security_group_ids: [awsSecurityGroupId(project)],
         snapshot_retention_limit: component.config.backupRetentionDays,
         maintenance_window: component.config.maintenanceWindow,
         tags: componentTags(component)
@@ -237,8 +418,8 @@ function awsModuleBody(project: ProjectState, component: InfraComponent, base: R
       return {
         ...base,
         name: "${local.name_prefix}-alb",
-        vpc_id: moduleRef(project, "vpc", "vpc_id"),
-        subnets: moduleRef(project, "vpc", "public_subnets"),
+        vpc_id: awsVpcId(project),
+        subnets: awsPublicSubnetIds(project),
         certificate_arn: component.config.certificateArn || "var.acm_certificate_arn",
         enable_waf: component.config.enableWaf,
         domain_name: component.config.domainName,
@@ -247,19 +428,90 @@ function awsModuleBody(project: ProjectState, component: InfraComponent, base: R
         tags: componentTags(component)
       };
     default:
+      if (!mapping || mapping.moduleSource.startsWith("./")) {
+        return {
+          ...base,
+          name: `\${local.name_prefix}-${sanitizeName(component.name)}`,
+          region: "var.aws_region",
+          sku: component.config.sku,
+          capacity: component.config.replicas,
+          public_access_enabled: component.config.publicAccess,
+          private_connectivity_enabled: component.config.privateEndpoint,
+          placement_mode: component.config.zoneMode,
+          vpc_id: awsVpcId(project),
+          subnet_ids: awsPrivateSubnetIds(project),
+          security_group_ids: [awsSecurityGroupId(project)],
+          kms_key_id: "var.aws_kms_key_id",
+          optional_config: optionalConfig(component),
+          tags: componentTags(component)
+        };
+      }
+
       return {
         ...base,
         name: `\${local.name_prefix}-${sanitizeName(component.name)}`,
+        name_prefix: "${local.name_prefix}",
         region: "var.aws_region",
         sku: component.config.sku,
         capacity: component.config.replicas,
         public_access_enabled: component.config.publicAccess,
         private_connectivity_enabled: component.config.privateEndpoint,
         placement_mode: component.config.zoneMode,
-        vpc_id: moduleRef(project, "vpc", "vpc_id"),
-        subnet_ids: moduleRef(project, "vpc", "private_subnets"),
-        security_group_ids: [moduleRef(project, "security-group", "security_group_id")],
-        kms_key_id: "try(module.kms_key_platform.id, null)",
+        vpc_id: awsVpcId(project),
+        subnet_ids: awsPrivateSubnetIds(project),
+        vpc_subnet_ids: awsPrivateSubnetIds(project),
+        security_group_ids: [awsSecurityGroupId(project)],
+        kms_key_id: "var.aws_kms_key_id",
+        aws_service_principal: "logs.amazonaws.com",
+        retention_in_days: component.config.backupRetentionDays,
+        launch_template_id: "var.aws_launch_template_id",
+        launch_configuration: "var.aws_launch_configuration_name",
+        asg_max_size: component.config.maxCapacity ?? component.config.replicas,
+        create_service_role: true,
+        image_url: component.config.containerImage,
+        service_name: sanitizeName(component.name),
+        project_name: sanitizeName(component.name),
+        app_name: sanitizeName(component.name),
+        endpoint_name: sanitizeName(component.name),
+        server_name: sanitizeName(component.name),
+        instance_alias: sanitizeName(component.name),
+        domain_name: component.config.domainName,
+        endpoint_type: component.config.privateEndpoint ? "VPC" : "PUBLIC",
+        domain: "S3",
+        enable_logging: component.config.enableAuditLogs,
+        log_retention_days: component.config.backupRetentionDays,
+        private_dns_enabled: component.config.privateDns ?? true,
+        enabled_gateway_endpoints: ["s3", "dynamodb"].includes(awsEndpointShortName(component.config.serviceName)) ? [awsEndpointShortName(component.config.serviceName)] : [],
+        enabled_interface_endpoints: ["s3", "dynamodb"].includes(awsEndpointShortName(component.config.serviceName)) ? [] : [awsEndpointShortName(component.config.serviceName)],
+        specified_regions: ["var.aws_region"],
+        private_subnet_ids_p: awsPrivateSubnetIds(project),
+        private_subnet_ids_s: "var.aws_secondary_private_subnet_ids",
+        sec_region: "var.aws_secondary_region",
+        password: "var.sensitive_database_password",
+        database_name: sanitizeName(project.name).replaceAll("-", "_"),
+        engine: "aurora-postgresql",
+        engine_version_pg: component.config.engineVersion,
+        identifier: `\${local.name_prefix}-${sanitizeName(component.name)}`,
+        instance_class: component.config.instanceClass,
+        username: "tfadmin",
+        primary_instance_count: component.config.minCapacity ?? component.config.replicas,
+        secondary_instance_count: 0,
+        build_image: "aws/codebuild/standard:7.0",
+        create_role_and_policy: true,
+        app_tags: componentTags(component),
+        allow_public_access_network_policy: component.config.publicAccess,
+        resource_arn: "var.aws_shield_protected_resource_arn",
+        protection_group_config: [
+          {
+            id: "${local.name_prefix}-shield",
+            aggregation: "MAX",
+            pattern: "ALL"
+          }
+        ],
+        agent_name: sanitizeName(component.name),
+        collection_name: sanitizeName(component.name),
+        guardrail_name: sanitizeName(component.name),
+        kb_name: sanitizeName(component.name),
         optional_config: optionalConfig(component),
         tags: componentTags(component)
       };
@@ -285,22 +537,19 @@ function azureModuleBody(project: ProjectState, component: InfraComponent, base:
       return {
         ...base,
         ...common,
-        vnet_cidr: [component.config.cidr],
+        cidrs: [component.config.cidr],
         extra_tags: componentTags(component),
-        subnets: {
-          aks: { cidrs: [`${String(component.config.cidr).split(".").slice(0, 2).join(".")}.16.0/20`] },
-          appgw: { cidrs: [`${String(component.config.cidr).split(".").slice(0, 2).join(".")}.32.0/24`] },
-          data: { cidrs: [`${String(component.config.cidr).split(".").slice(0, 2).join(".")}.48.0/24`] }
-        }
+        ...azureFlowLogs(component)
       };
     case "security-group":
       return {
         ...base,
         ...common,
         ssh_inbound_allowed: component.config.enableSsh,
-        source_address_prefixes: component.config.allowedCidrBlocks,
-        deny_all_inbound: true,
-        extra_tags: componentTags(component)
+        ssh_source_allowed: component.config.allowedCidrBlocks,
+        all_inbound_denied: true,
+        extra_tags: componentTags(component),
+        ...azureFlowLogs(component)
       };
     case "eks":
       return {
@@ -308,16 +557,27 @@ function azureModuleBody(project: ProjectState, component: InfraComponent, base:
         ...common,
         kubernetes_version: component.config.clusterVersion,
         private_cluster_enabled: component.config.privateEndpoint,
-        node_pools: {
-          system: {
+        logs_kube_audit_enabled: component.config.enableAuditLogs,
+        maintenance_window: typeof component.config.maintenanceWindow === "string" && component.config.maintenanceWindow
+          ? { allowed: [{ day: component.config.maintenanceWindow.split(/\s+/)[0], hours: [Number(component.config.maintenanceWindow.match(/\d{1,2}/)?.[0] ?? 4)] }] }
+          : undefined,
+        node_pools: [
+          {
+            name: "system",
             vm_size: component.config.nodeInstanceType,
             min_count: component.config.minNodes,
             max_count: component.config.maxNodes,
-            enable_auto_scaling: component.config.autoscaling ?? true
+            auto_scaling_enabled: component.config.autoscaling ?? true,
+            tags: componentTags(component, "{}")
           }
+        ],
+        nodes_subnet: {
+          name: "var.azure_aks_subnet_name",
+          virtual_network_name: "var.azure_vnet_name",
+          resource_group_name: "azurerm_resource_group.main.name"
         },
-        vnet_subnet_id: moduleRef(project, "vpc", "subnets_ids[\"aks\"]"),
-        extra_tags: componentTags(component)
+        extra_tags: componentTags(component),
+        ...azureDiagnostics(component)
       };
     case "rds":
       return {
@@ -329,12 +589,13 @@ function azureModuleBody(project: ProjectState, component: InfraComponent, base:
         postgresql_version: Number(component.config.engineVersion),
         size: component.config.instanceClass,
         storage_mb: Number(component.config.allocatedStorage) * 1024,
-        delegated_subnet_id: moduleRef(project, "vpc", "subnets_ids[\"data\"]"),
+        delegated_subnet: { id: "var.azure_data_subnet_id" },
         public_network_access_enabled: false,
-        standby_zone: component.config.multiAz ? 2 : null,
+        high_availability: component.config.multiAz ? { mode: "ZoneRedundant", standby_availability_zone: 2 } : null,
         backup_retention_days: component.config.backupRetentionDays,
-        maintenance_window: component.config.maintenanceWindow,
-        extra_tags: componentTags(component)
+        maintenance_window: azureMaintenanceWindow(component.config.maintenanceWindow),
+        extra_tags: componentTags(component),
+        ...azureDiagnostics(component)
       };
     case "redis":
       return {
@@ -343,40 +604,138 @@ function azureModuleBody(project: ProjectState, component: InfraComponent, base:
         sku_name: component.config.nodeType,
         capacity: component.config.replicas,
         minimum_tls_version: component.config.transitEncryption ? "1.2" : "1.0",
-        subnet_id: moduleRef(project, "vpc", "subnets_ids[\"data\"]"),
-        extra_tags: componentTags(component)
+        subnet_id: "var.azure_data_subnet_id",
+        extra_tags: componentTags(component),
+        ...azureDiagnostics(component)
       };
     case "alb":
       return {
         ...base,
         ...common,
-        subnet_id: moduleRef(project, "vpc", "subnets_ids[\"appgw\"]"),
-        certificate_secret_id: component.config.certificateArn || "var.edge_certificate_id",
-        waf_configuration: {
-          enabled: component.config.enableWaf,
-          firewall_mode: "Prevention",
-          rule_set_type: "OWASP",
-          rule_set_version: "3.2"
-        },
-        backend_fqdn: component.config.domainName,
-        extra_tags: componentTags(component)
+        sku: component.config.sku || (component.config.enableWaf ? "WAF_v2" : "Standard_v2"),
+        zones: azureZoneList(component),
+        sku_capacity: component.config.replicas,
+        autoscale_configuration: component.config.autoscaling
+          ? {
+              min_capacity: component.config.minCapacity ?? 1,
+              max_capacity: component.config.maxCapacity ?? 5
+            }
+          : undefined,
+        create_subnet: false,
+        subnet_id: "var.azure_app_gateway_subnet_id",
+        firewall_policy_id: component.config.enableWaf ? "var.azure_waf_policy_id" : null,
+        force_firewall_policy_association: component.config.enableWaf,
+        ssl_certificates: component.config.certificateArn || "var.edge_certificate_id"
+          ? [{ name: "edge", key_vault_secret_id: component.config.certificateArn || "var.edge_certificate_id" }]
+          : [],
+        backend_address_pools: [{ name: "default", fqdns: [component.config.domainName] }],
+        backend_http_settings: [{ name: "default", port: 443, protocol: "Https" }],
+        frontend_ports: [{ name: "https", port: 443 }],
+        http_listeners: [{ name: "https", frontend_port_name: "https", protocol: "Https", ssl_certificate_name: "edge" }],
+        request_routing_rules: [{ name: "default", http_listener_name: "https", backend_address_pool_name: "default", backend_http_settings_name: "default", priority: 100 }],
+        app_gateway_tags: componentTags(component, "{}"),
+        extra_tags: componentTags(component),
+        ...azureDiagnostics(component),
+        ...azureFlowLogs(component)
       };
     default:
       return {
         ...base,
         ...common,
+        parent_id: "azurerm_resource_group.main.id",
+        resource_group_id: "azurerm_resource_group.main.id",
+        custom_name: `\${local.name_prefix}-${sanitizeName(component.name)}`,
         name: `\${local.name_prefix}-${sanitizeName(component.name)}`,
-        sku: component.config.sku,
+        logs_destinations_ids: "var.azure_diagnostic_destination_ids",
+        os_type: "Linux",
+        sku_name: component.config.sku,
+        sku: component.type === "expressroute" ? { tier: "Standard", family: "MeteredData" } : component.config.sku,
         capacity: component.config.replicas,
+        zone: component.config.zoneMode === "zonal" ? "1" : null,
+        zones: azureZoneList(component),
         public_network_access_enabled: component.config.publicAccess,
         private_endpoint_enabled: component.config.privateEndpoint,
         zone_mode: component.config.zoneMode,
-        subnet_id: moduleRef(project, "vpc", "subnets_ids[\"data\"]"),
+        subnet_id: "var.azure_data_subnet_id",
+        subnet_ids: ["var.azure_data_subnet_id"],
+        network_interfaces: {
+          primary: {
+            name: `\${local.name_prefix}-${sanitizeName(component.name)}-nic`,
+            ip_configurations: {
+              primary: {
+                name: "primary",
+                private_ip_subnet_resource_id: "var.azure_data_subnet_id",
+                create_public_ip_address: component.config.publicAccess
+              }
+            }
+          }
+        },
+        extension_protected_setting: {},
+        user_data_base64: "",
+        template: {
+          min_replicas: component.config.autoscaling ? component.config.minCapacity ?? 1 : 1,
+          max_replicas: component.config.autoscaling ? component.config.maxCapacity ?? component.config.replicas ?? 3 : component.config.replicas ?? 1,
+          containers: [
+            {
+              name: sanitizeName(component.name) || "app",
+              image: component.config.containerImage || "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+              cpu: 0.5,
+              memory: "1Gi"
+            }
+          ]
+        },
+        container_app_environment_resource_id: "var.azure_container_app_environment_resource_id",
+        virtual_network_name: "var.azure_vnet_name",
+        subnet_bastion_cidr: "var.azure_bastion_subnet_cidr",
+        subnet_cidr: "var.azure_firewall_subnet_cidr",
+        target_resource: component.config.targetResourceId || "var.azure_private_endpoint_target_resource_id",
+        administrator_login: "tfadmin",
+        administrator_password: "var.sensitive_database_password",
+        admin_username: component.config.adminUsername || "azureuser",
+        admin_password: "var.sensitive_database_password",
+        publisher_name: project.owner,
+        publisher_email: component.config.publisherEmail,
+        domain_name: component.config.zoneName || component.config.domainName,
+        dns_config: {
+          relative_name: sanitizeName(project.name),
+          ttl: 60
+        },
+        monitor_config: {
+          protocol: "HTTPS",
+          port: 443,
+          path: "/"
+        },
+        traffic_routing_method: component.config.routingMethod || "Performance",
+        workspace_id: "var.azure_log_analytics_workspace_resource_id",
+        storage_data_lake_gen2_filesystem_id: "var.azure_synapse_storage_filesystem_id",
+        sql_administrator_login_password: "var.sensitive_database_password",
+        kind: component.type === "azure-openai" ? "OpenAI" : "CognitiveServices",
+        namespace_parameters: {
+          sku: component.config.sku || "Standard",
+          capacity: component.config.replicas ?? 2,
+          auto_inflate_enabled: component.config.autoscaling,
+          maximum_throughput_units: component.config.maxCapacity,
+          public_network_access_enabled: component.config.publicAccess ?? false,
+          minimum_tls_version: "1.2"
+        },
+        containers_config: [
+          {
+            name: sanitizeName(component.name) || "app",
+            image: component.config.containerImage || "mcr.microsoft.com/azuredocs/aci-helloworld:latest",
+            cpu: 1,
+            memory: 1.5,
+            ports: [{ port: 80, protocol: "TCP" }]
+          }
+        ],
+        content: "jsonencode({ lenses = [] })",
+        role_assignments_for_resource_groups: {},
         diagnostic_settings: {
           enabled: true,
           log_analytics_workspace_id: "try(module.log_analytics_observability.id, null)"
         },
-        optional_config: optionalConfig(component)
+        optional_config: optionalConfig(component),
+        extra_tags: componentTags(component),
+        tags: componentTags(component)
       };
   }
 }
@@ -456,7 +815,12 @@ function gcpModuleBody(project: ProjectState, component: InfraComponent, base: R
             auto_repair: true,
             auto_upgrade: true
           }
-        ]
+        ],
+        deletion_protection: component.config.deletionProtection,
+        cluster_resource_labels: gcpLabels(component),
+        logging_service: component.config.enableAuditLogs ? "logging.googleapis.com/kubernetes" : undefined,
+        monitoring_service: component.config.enableMonitoring ? "monitoring.googleapis.com/kubernetes" : undefined,
+        horizontal_pod_autoscaling: component.config.autoscaling
       };
     case "rds":
       return {
@@ -468,11 +832,20 @@ function gcpModuleBody(project: ProjectState, component: InfraComponent, base: R
         tier: component.config.instanceClass,
         disk_size: component.config.allocatedStorage,
         availability_type: component.config.multiAz ? "REGIONAL" : "ZONAL",
-        deletion_protection: project.environment === "prod",
+        deletion_protection: component.config.deletionProtection ?? (project.environment === "prod"),
+        deletion_protection_enabled: component.config.deletionProtection ?? (project.environment === "prod"),
         backup_configuration: {
           enabled: Number(component.config.backupRetentionDays ?? 0) > 0,
           retained_backups: component.config.backupRetentionDays
         },
+        insights_config: component.config.enableMonitoring
+          ? {
+              query_insights_enabled: true,
+              record_application_tags: true,
+              record_client_address: true
+            }
+          : undefined,
+        user_labels: gcpLabels(component),
         ip_configuration: {
           ipv4_enabled: false,
           private_network: moduleRef(project, "vpc", "network_self_link")
@@ -499,6 +872,7 @@ function gcpModuleBody(project: ProjectState, component: InfraComponent, base: R
         create_address: true,
         security_policy: component.config.enableWaf ? "google_compute_security_policy.edge.id" : null,
         certificate_map: component.config.certificateArn || null,
+        labels: gcpLabels(component),
         backends: {
           default: {
             protocol: "HTTP",
@@ -529,7 +903,7 @@ function generateMain(project: ProjectState): string {
       : "";
 
   const modules = enabledComponents(project)
-    .map((component) => block("module", [moduleName(component)], componentModuleBody(project, component)))
+    .map((component) => block("module", [moduleName(project, component)], componentModuleBody(project, component)))
     .join("\n\n");
 
   return [locals, providerBootstrap, modules].filter(Boolean).join("\n\n") + "\n";
@@ -553,6 +927,119 @@ function generateVariables(project: ProjectState): string {
   description = "Google Cloud project ID."
   type        = string
   default     = "${gcpProjectId(project)}"
+}`
+        ]
+      : []),
+    ...(project.provider === "aws"
+      ? [
+          `variable "aws_secondary_region" {
+  description = "Secondary AWS region used by AWS-IA multi-region modules such as Aurora."
+  type        = string
+  default     = "${project.region}"
+}`,
+          `variable "aws_secondary_private_subnet_ids" {
+  description = "Secondary-region private subnet IDs used by AWS-IA modules that require paired regional subnets."
+  type        = list(string)
+  default     = []
+}`,
+          `variable "aws_kms_key_id" {
+  description = "Existing AWS KMS key ID or ARN for AWS-IA modules that require encryption wiring."
+  type        = string
+  default     = ""
+}`,
+          `variable "aws_launch_template_id" {
+  description = "Existing EC2 launch template ID used by the AWS-IA ECS cluster module."
+  type        = string
+  default     = ""
+}`,
+          `variable "aws_launch_configuration_name" {
+  description = "Existing EC2 launch configuration name used by the AWS-IA ECS cluster module."
+  type        = string
+  default     = ""
+}`,
+          `variable "aws_shield_protected_resource_arn" {
+  description = "AWS resource ARN protected by the AWS-IA Shield Advanced module."
+  type        = string
+  default     = ""
+}`
+        ]
+      : []),
+    ...(project.provider === "azure"
+      ? [
+          `variable "azure_vnet_name" {
+  description = "Azure VNet name used by modules that attach to existing subnets."
+  type        = string
+  default     = ""
+}`,
+          `variable "azure_aks_subnet_name" {
+  description = "Azure subnet name for AKS nodes."
+  type        = string
+  default     = "aks"
+}`,
+          `variable "azure_data_subnet_id" {
+  description = "Azure subnet ID for data services such as PostgreSQL and Redis."
+  type        = string
+  default     = ""
+}`,
+          `variable "azure_app_gateway_subnet_id" {
+  description = "Azure subnet ID for Application Gateway."
+  type        = string
+  default     = ""
+}`,
+          `variable "azure_bastion_subnet_cidr" {
+  description = "CIDR range for the Azure Bastion subnet when the Claranet Bastion module is selected."
+  type        = string
+  default     = "10.60.250.0/27"
+}`,
+          `variable "azure_firewall_subnet_cidr" {
+  description = "CIDR range for the Azure Firewall subnet when the Claranet Firewall module is selected."
+  type        = string
+  default     = "10.60.251.0/26"
+}`,
+          `variable "azure_private_endpoint_target_resource_id" {
+  description = "Fallback target resource ID or private link alias for Azure Private Endpoint."
+  type        = string
+  default     = ""
+}`,
+          `variable "azure_container_app_environment_resource_id" {
+  description = "Existing Container Apps managed environment resource ID for AVM Container App."
+  type        = string
+  default     = ""
+}`,
+          `variable "azure_log_analytics_workspace_resource_id" {
+  description = "Existing Log Analytics workspace resource ID for modules that attach telemetry resources."
+  type        = string
+  default     = ""
+}`,
+          `variable "azure_synapse_storage_filesystem_id" {
+  description = "Existing ADLS Gen2 filesystem ID required by the AVM Synapse workspace module."
+  type        = string
+  default     = ""
+}`,
+          `variable "azure_diagnostic_destination_ids" {
+  description = "Destination resource IDs for Azure diagnostic settings when monitoring or audit logs are enabled."
+  type        = list(string)
+  default     = []
+}`,
+          `variable "azure_flow_log_storage_account_id" {
+  description = "Storage account ID for Azure Network Watcher flow logs when enabled."
+  type        = string
+  default     = null
+}`,
+          `variable "azure_log_analytics_workspace_id" {
+  description = "Log Analytics workspace resource ID for Azure diagnostics or flow logs."
+  type        = string
+  default     = null
+}`,
+          `variable "azure_log_analytics_workspace_guid" {
+  description = "Log Analytics workspace GUID for Azure flow log traffic analytics."
+  type        = string
+  default     = null
+}`,
+          `variable "azure_waf_policy_id" {
+  description = "Existing Azure WAF policy ID to associate with Application Gateway when WAF is enabled."
+  type        = string
+  default     = null
 }`
         ]
       : []),
@@ -580,10 +1067,10 @@ function generateOutputs(project: ProjectState): string {
   if (vpc) {
     const vpcValue =
       project.provider === "azure"
-        ? `module.${moduleName(vpc)}.vnet_id`
+        ? `module.${moduleName(project, vpc)}.id`
         : project.provider === "gcp"
-          ? `module.${moduleName(vpc)}.network_id`
-          : `module.${moduleName(vpc)}.vpc_id`;
+          ? `module.${moduleName(project, vpc)}.network_id`
+          : `module.${moduleName(project, vpc)}.vpc_attributes.id`;
     outputs.push(`output "vpc_id" {
   description = "Created network ID."
   value       = ${vpcValue}
@@ -593,11 +1080,11 @@ function generateOutputs(project: ProjectState): string {
   const eks = byType("eks");
   if (eks) {
     const clusterValue =
-      project.provider === "azure"
-        ? `module.${moduleName(eks)}.name`
-        : project.provider === "gcp"
-          ? `module.${moduleName(eks)}.name`
-          : `module.${moduleName(eks)}.cluster_name`;
+      project.provider === "azure" || project.provider === "gcp"
+        ? `module.${moduleName(project, eks)}.name`
+        : getModuleMapping(eks.type, project.provider)?.moduleSource.startsWith("./")
+          ? `module.${moduleName(project, eks)}.name`
+          : `module.${moduleName(project, eks)}.cluster_name`;
     outputs.push(`output "eks_cluster_name" {
   description = "Kubernetes cluster name."
   value       = ${clusterValue}
@@ -608,10 +1095,12 @@ function generateOutputs(project: ProjectState): string {
   if (rds) {
     const dbValue =
       project.provider === "azure"
-        ? `module.${moduleName(rds)}.id`
+        ? `module.${moduleName(project, rds)}.id`
         : project.provider === "gcp"
-          ? `module.${moduleName(rds)}.instance_connection_name`
-          : `module.${moduleName(rds)}.db_instance_endpoint`;
+          ? `module.${moduleName(project, rds)}.instance_connection_name`
+          : getModuleMapping(rds.type, project.provider)?.moduleSource.startsWith("./")
+            ? `module.${moduleName(project, rds)}.id`
+            : `module.${moduleName(project, rds)}.db_instance_endpoint`;
     outputs.push(`output "postgres_endpoint" {
   description = "PostgreSQL endpoint or connection identifier."
   value       = ${dbValue}
@@ -720,6 +1209,21 @@ acm_certificate_arn = ""
     return `location              = "${project.region}"
 environment           = "${project.environment}"
 edge_certificate_id   = ""
+azure_vnet_name       = ""
+azure_aks_subnet_name = "aks"
+azure_data_subnet_id  = ""
+azure_app_gateway_subnet_id = ""
+azure_bastion_subnet_cidr = "10.60.250.0/27"
+azure_firewall_subnet_cidr = "10.60.251.0/26"
+azure_private_endpoint_target_resource_id = ""
+azure_container_app_environment_resource_id = ""
+azure_log_analytics_workspace_resource_id = ""
+azure_synapse_storage_filesystem_id = ""
+azure_diagnostic_destination_ids = []
+azure_flow_log_storage_account_id = null
+azure_log_analytics_workspace_id = null
+azure_log_analytics_workspace_guid = null
+azure_waf_policy_id = null
 # sensitive_database_password should be supplied through a secret manager or TF_VAR_sensitive_database_password.
 `;
   }
@@ -727,6 +1231,12 @@ edge_certificate_id   = ""
   return `aws_region          = "${project.region}"
 environment         = "${project.environment}"
 acm_certificate_arn = ""
+aws_secondary_region = "${project.region}"
+aws_secondary_private_subnet_ids = []
+aws_kms_key_id = ""
+aws_launch_template_id = ""
+aws_launch_configuration_name = ""
+aws_shield_protected_resource_arn = ""
 # sensitive_database_password should be supplied through a secret manager or TF_VAR_sensitive_database_password.
 `;
 }
@@ -776,6 +1286,7 @@ function generateLocalModuleFiles(project: ProjectState): GeneratedFile[] {
         ? `variable "region" {
   description = "AWS region."
   type        = string
+  default     = "${project.region}"
 }
 
 variable "public_access_enabled" {
@@ -818,6 +1329,186 @@ variable "kms_key_id" {
   description = "Optional KMS key ID."
   type        = string
   default     = null
+}
+
+variable "ingress_cidr_blocks" {
+  description = "Optional ingress CIDR blocks."
+  type        = list(string)
+  default     = []
+}
+
+variable "enable_ssh" {
+  description = "Whether SSH ingress is enabled."
+  type        = bool
+  default     = false
+}
+
+variable "egress_rules" {
+  description = "Optional egress rule names."
+  type        = list(string)
+  default     = []
+}
+
+variable "cluster_name" {
+  description = "Optional Kubernetes cluster name."
+  type        = string
+  default     = null
+}
+
+variable "cluster_version" {
+  description = "Optional Kubernetes cluster version."
+  type        = string
+  default     = null
+}
+
+variable "cluster_endpoint_private_access" {
+  description = "Whether a cluster endpoint should be private."
+  type        = bool
+  default     = true
+}
+
+variable "cluster_enabled_log_types" {
+  description = "Optional cluster log types."
+  type        = list(string)
+  default     = []
+}
+
+variable "cluster_log_retention_in_days" {
+  description = "Optional control-plane log retention."
+  type        = number
+  default     = null
+}
+
+variable "node_groups" {
+  description = "Optional node group configuration."
+  type        = any
+  default     = {}
+}
+
+variable "identifier" {
+  description = "Optional resource identifier."
+  type        = string
+  default     = null
+}
+
+variable "engine" {
+  description = "Optional data service engine."
+  type        = string
+  default     = null
+}
+
+variable "engine_version" {
+  description = "Optional engine version."
+  type        = string
+  default     = null
+}
+
+variable "instance_class" {
+  description = "Optional instance class."
+  type        = string
+  default     = null
+}
+
+variable "allocated_storage" {
+  description = "Optional allocated storage in GB."
+  type        = number
+  default     = null
+}
+
+variable "multi_az" {
+  description = "Whether Multi-AZ deployment is requested."
+  type        = bool
+  default     = false
+}
+
+variable "vpc_security_group_ids" {
+  description = "Optional VPC security group IDs."
+  type        = list(string)
+  default     = []
+}
+
+variable "storage_encrypted" {
+  description = "Whether storage encryption is requested."
+  type        = bool
+  default     = true
+}
+
+variable "deletion_protection" {
+  description = "Whether deletion protection is requested."
+  type        = bool
+  default     = false
+}
+
+variable "backup_retention_period" {
+  description = "Optional backup retention period."
+  type        = number
+  default     = null
+}
+
+variable "maintenance_window" {
+  description = "Optional maintenance window."
+  type        = string
+  default     = null
+}
+
+variable "node_type" {
+  description = "Optional cache node type."
+  type        = string
+  default     = null
+}
+
+variable "replicas_per_node_group" {
+  description = "Optional replicas per node group."
+  type        = number
+  default     = null
+}
+
+variable "transit_encryption_enabled" {
+  description = "Whether transit encryption is requested."
+  type        = bool
+  default     = true
+}
+
+variable "snapshot_retention_limit" {
+  description = "Optional snapshot retention limit."
+  type        = number
+  default     = null
+}
+
+variable "subnets" {
+  description = "Optional subnet IDs."
+  type        = any
+  default     = []
+}
+
+variable "certificate_arn" {
+  description = "Optional certificate ARN."
+  type        = string
+  default     = null
+}
+
+variable "enable_waf" {
+  description = "Whether WAF is requested."
+  type        = bool
+  default     = false
+}
+
+variable "domain_name" {
+  description = "Optional domain name."
+  type        = string
+  default     = null
+}
+
+variable "access_logs_enabled" {
+  description = "Whether access logs are requested."
+  type        = bool
+  default     = false
+}
+
+variable "deletion_protection_enabled" {
+  description = "Whether deletion protection is requested."
+  type        = bool
+  default     = false
 }
 `
         : `variable "location" {
@@ -874,11 +1565,13 @@ variable "resource_group_name" {
 variable "sku" {
   description = "Service SKU or tier."
   type        = string
+  default     = "standard"
 }
 
 variable "capacity" {
   description = "Service capacity setting."
   type        = number
+  default     = 1
 }
 
 variable "optional_config" {
